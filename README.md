@@ -1,4 +1,4 @@
-# SSMS — Simple Stop Motion Studio
+# Basra is a Simple Stop Motion Studio
 
 A lightweight, browser-based stop-motion animation tool. Drag characters and backgrounds onto a stage, save shots, and play them back as a film — all in plain PHP, HTML, CSS, and JavaScript.
 
