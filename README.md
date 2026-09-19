@@ -23,7 +23,7 @@ A lightweight, browser-based stop-motion animation tool. Drag characters and bac
 1. Upload all files to your PHP server.
 2. Create two folders in the project root: `backgrounds/` and `characters/`.
 3. Open `index.php` in your browser.
-
+4- see this preview here https://followup-iq.net/stopmotion/
 ## Files
 
 | File | Purpose |
