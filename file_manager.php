@@ -111,6 +111,11 @@
         <h2>Characters &amp; Parts</h2>
         <div id="characters-grid" class="files-grid"></div>
     </section>
+
+    <section>
+        <h2>Audio</h2>
+        <div id="audio-grid" class="files-grid"></div>
+    </section>
 </div>
 
 <script>
@@ -148,10 +153,18 @@ function buildFileCard(path, type) {
     const card = document.createElement('div');
     card.className = 'file-card';
 
-    const img = document.createElement('img');
-    img.src = path;
-    img.alt = fileName;
-    card.appendChild(img);
+    if (type === 'audio') {
+        const audio = document.createElement('audio');
+        audio.src = path;
+        audio.controls = true;
+        audio.style.width = '100%';
+        card.appendChild(audio);
+    } else {
+        const img = document.createElement('img');
+        img.src = path;
+        img.alt = fileName;
+        card.appendChild(img);
+    }
 
     const nameRow = document.createElement('div');
     nameRow.className = 'name-row';
@@ -257,6 +270,7 @@ async function deleteFile(type, fileName, statusEl) {
 function loadAll() {
     loadList('backgrounds', 'backgrounds-grid');
     loadList('characters', 'characters-grid');
+    loadList('audio', 'audio-grid');
 }
 
 document.addEventListener('DOMContentLoaded', loadAll);

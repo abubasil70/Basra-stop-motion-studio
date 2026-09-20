@@ -6,8 +6,13 @@ $dir = "";
 
 if ($type === 'backgrounds') {
     $dir = "backgrounds/";
+    $allowedExt = ['png', 'jpg', 'jpeg'];
 } elseif ($type === 'characters') {
     $dir = "characters/";
+    $allowedExt = ['png', 'jpg', 'jpeg'];
+} elseif ($type === 'audio') {
+    $dir = "audio/";
+    $allowedExt = ['mp3'];
 } else {
     echo json_encode([]);
     exit;
@@ -19,7 +24,7 @@ if (is_dir($dir)) {
     while (($file = readdir($handle)) !== false) {
         if ($file !== '.' && $file !== '..') {
             $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-            if (in_array($ext, ['png', 'jpg', 'jpeg'])) {
+            if (in_array($ext, $allowedExt)) {
                 $files[] = $dir . $file;
             }
         }

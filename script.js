@@ -1,12 +1,40 @@
 const container = document.getElementById('canvas-container');
+const camLayer = document.getElementById('camera-layer'); // يلفّ الخلفية وكل الشخصيات معاً لأجل "كاميرا" المسرح الكاملة
 const bgImage = document.getElementById('bg-image');
 let selectedElement = null;
 let bgScale = 1;
 let bgOffsetX = 0; // إزاحة أفقية بالبكسل
 let bgOffsetY = 0; // إزاحة عمودية بالبكسل
 
+// ================== نظام التراجع (Undo) ==================
+// يحفظ حالة المسرح الحالي (وليس الخط الزمني) قبل كل تعديل مؤثر، بحد أقصى 10 حالات —
+// الأقدم يُحذف تلقائياً عند تجاوز الحد. يُفرَّغ المكدس عند القفز للقطة أخرى (انظر restoreScene).
+let undoStack = [];
+const UNDO_LIMIT = 10;
+
+function pushUndoState() {
+    undoStack.push(serializeScene());
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    updateUndoButtonState();
+}
+
+function undo() {
+    if (undoStack.length === 0) return;
+    const prevState = undoStack.pop();
+    applySceneState(prevState);
+    updateUndoButtonState();
+}
+
+function updateUndoButtonState() {
+    const btn = document.getElementById('undo-btn');
+    if (!btn) return;
+    btn.disabled = undoStack.length === 0;
+    btn.textContent = `↶ Undo (${undoStack.length})`;
+}
+
 // 1. تعيين خلفية المسرح
 function setBackground(src) {
+    pushUndoState();
     bgImage.src = src;
     // إعادة الضبط لكل خلفية جديدة حتى تبدأ من المنتصف بدون تراكم إزاحات قديمة
     bgScale = 1;
@@ -22,6 +50,7 @@ function updateBgTransform() {
 }
 
 function zoomBg(amount) {
+    pushUndoState();
     bgScale += amount;
     if (bgScale < 0.5) bgScale = 0.5; // حد أدنى للزووم
     if (bgScale > 4) bgScale = 4;     // حد أقصى للزووم
@@ -29,9 +58,56 @@ function zoomBg(amount) {
 }
 
 function panBg(dx, dy) {
+    pushUndoState();
     bgOffsetX += dx;
     bgOffsetY += dy;
     updateBgTransform();
+}
+
+// ================== كاميرا المسرح الكاملة (خلفية + كل الشخصيات معاً) ==================
+// بعكس zoomBg/panBg اللتين تحرّكان الخلفية وحدها فقط، هذه تحرّك كل شيء على المسرح دفعة واحدة
+// عبر تطبيق التحويل على camera-layer نفسها (الأب المشترك للخلفية وكل الشخصيات). كل لقطة تحفظ
+// قيم الكاميرا الخاصة بها، فيمكن محاكاة حركة كاميرا حقيقية (Push in / Pan) بين اللقطات أثناء العرض.
+let camScale = 1;
+let camOffsetX = 0;
+let camOffsetY = 0;
+
+function updateCameraTransform() {
+    camLayer.style.transform = `translate(${camOffsetX}px, ${camOffsetY}px) scale(${camScale})`;
+}
+
+function zoomCam(amount) {
+    pushUndoState();
+    camScale += amount;
+    if (camScale < 0.3) camScale = 0.3; // حد أدنى للزووم
+    if (camScale > 4) camScale = 4;     // حد أقصى للزووم
+    updateCameraTransform();
+}
+
+function panCam(dx, dy) {
+    pushUndoState();
+    camOffsetX += dx;
+    camOffsetY += dy;
+    updateCameraTransform();
+}
+
+function resetCamera() {
+    pushUndoState();
+    camScale = 1;
+    camOffsetX = 0;
+    camOffsetY = 0;
+    updateCameraTransform();
+}
+
+// ================== خطوط التأطير الإرشادية (Composition Guides) ==================
+// أداة عمل بصرية بحتة فوق المسرح (قاعدة الأثلاث + خط المنتصف): لا تُحفظ ضمن serializeScene،
+// ولا تظهر في المعاينات المصغّرة أو عرض الفيلم أو التصدير، لأنها ليست جزءاً من اللقطة نفسها
+function toggleCompositionGuides() {
+    const layer = document.getElementById('composition-guides');
+    const btn = document.getElementById('guides-btn');
+    if (!layer) return;
+    const isActive = layer.classList.toggle('active');
+    if (btn) btn.style.backgroundColor = isActive ? '#e74c3c' : '#2c7873';
 }
 
 // 3. إضافة شخصية أو جزء لمسرح العمل (أو داخل كائن مركب محدد حالياً)
@@ -49,6 +125,7 @@ function getActiveRig() {
 }
 
 function addCharacterToStage(src) {
+    pushUndoState();
     // الغلاف الخارجي: هو العنصر القابل للتحديد والسحب، ويحمل التدوير والتكبير حول نقطة الارتكاز
     const wrapper = document.createElement('div');
     wrapper.className = 'character';
@@ -61,7 +138,7 @@ function addCharacterToStage(src) {
     wrapper.appendChild(img);
 
     const targetRig = getActiveRig();
-    const parent = targetRig || container;
+    const parent = targetRig || camLayer;
 
     // إزاحة بسيطة لكل جزء جديد حتى لا يتراكب فوق غيره بالضبط
     const offset = (charCounter % 6) * 25;
@@ -86,6 +163,7 @@ function addCharacterToStage(src) {
 
 // إنشاء كائن مركب جديد (إطار فارغ) يمكن إضافة الأجزاء بداخله والتحكم بالكل معاً
 function createRig() {
+    pushUndoState();
     const rig = document.createElement('div');
     rig.className = 'rig';
 
@@ -104,14 +182,15 @@ function createRig() {
     rig.style.zIndex = topZIndex;
 
     makeDraggable(rig);
-    container.appendChild(rig);
+    camLayer.appendChild(rig);
     selectElement(rig);
 }
 
 // 4. نظام السحب والإفلات للشخصيات
 function makeDraggable(element) {
     let isDragging = false;
-    let startX, startY;
+    let dragMoved = false;
+    let startClientX, startClientY, startLeft, startTop;
 
     element.addEventListener('mousedown', (e) => {
         e.preventDefault(); // يمنع أي سلوك افتراضي للمتصفح (تحديد نص، سحب أصلي) يتعارض مع كودنا
@@ -119,6 +198,7 @@ function makeDraggable(element) {
 
         // إذا كان وضع تحديد نقطة الارتكاز مفعّلاً، نحسب موضع النقرة داخل الصورة كنسبة مئوية
         if (pivotMode) {
+            pushUndoState();
             const rect = element.getBoundingClientRect();
             const px = ((e.clientX - rect.left) / rect.width) * 100;
             const py = ((e.clientY - rect.top) / rect.height) * 100;
@@ -136,17 +216,29 @@ function makeDraggable(element) {
         }
 
         isDragging = true;
-        startX = e.clientX - element.offsetLeft;
-        startY = e.clientY - element.offsetTop;
+        dragMoved = false;
+        // نسجّل نقطة البداية بمقياس الشاشة الحقيقي + الموضع المحلي الحالي للعنصر،
+        // بدل احتساب فرق مباشر بينهما (الذي يفشل إن كانت كاميرا المسرح مكبَّرة/مصغَّرة)
+        startClientX = e.clientX;
+        startClientY = e.clientY;
+        startLeft = parseFloat(element.style.left) || 0;
+        startTop = parseFloat(element.style.top) || 0;
         e.stopPropagation();
     });
 
     document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
-        let x = e.clientX - startX;
-        let y = e.clientY - startY;
-        element.style.left = x + 'px';
-        element.style.top = y + 'px';
+        // نسجّل حالة التراجع مرة واحدة فقط عند أول حركة فعلية، وليس عند مجرد نقرة اختيار بلا سحب
+        if (!dragMoved) {
+            pushUndoState();
+            dragMoved = true;
+        }
+        // فرق الماوس بمقياس الشاشة يُقسَم على زووم كاميرا المسرح، حتى تبقى حركة السحب مطابقة
+        // بصرياً لحركة الماوس الفعلية بغض النظر عن مستوى تكبير الكاميرا الحالي
+        const dx = (e.clientX - startClientX) / camScale;
+        const dy = (e.clientY - startClientY) / camScale;
+        element.style.left = (startLeft + dx) + 'px';
+        element.style.top = (startTop + dy) + 'px';
     });
 
     document.addEventListener('mouseup', () => {
@@ -154,21 +246,20 @@ function makeDraggable(element) {
     });
 }
 
+// تحديد عنصر للتعديل فقط (بلا أي تأثير على ترتيب الطبقات) — رفع الطبقة يتم فقط عند إضافة عنصر
+// جديد فعلاً (في addCharacterToStage/createRig) أو صراحةً عبر bringForward، وليس عند كل نقرة تحديد،
+// وإلا فإن أي ترتيب يدوي للطبقات (bringForward/sendBackward) سيُلغى بمجرد النقر على العنصر مرة أخرى
 function selectElement(element) {
     if (selectedElement) {
         selectedElement.classList.remove('selected');
     }
     selectedElement = element;
     selectedElement.classList.add('selected');
-
-    // رفع العنصر المحدد لأعلى طبقة حتى يظهر فوق البقية دائماً
-    topZIndex++;
-    selectedElement.style.zIndex = topZIndex;
 }
 
 // الضغط على مساحة فاضية من المسرح (الخلفية) يلغي أي تحديد حالي
 container.addEventListener('mousedown', (e) => {
-    if (e.target === container || e.target === bgImage || e.target.parentElement.id === 'bg-layer') {
+    if (e.target === container || e.target === camLayer || e.target === bgImage || e.target.parentElement.id === 'bg-layer') {
         if (selectedElement) {
             selectedElement.classList.remove('selected');
             selectedElement = null;
@@ -178,11 +269,19 @@ container.addEventListener('mousedown', (e) => {
 
 // تحريك دقيق للعنصر المحدد بأسهم لوحة المفاتيح (1px عادي، 10px مع Shift للتحريك السريع)
 document.addEventListener('keydown', (e) => {
+    // اختصار التراجع (Ctrl+Z أو Cmd+Z على ماك) يعمل بغض النظر عن وجود تحديد حالي
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        undo();
+        return;
+    }
+
     if (!selectedElement) return;
     const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
     if (!arrowKeys.includes(e.key)) return;
 
     e.preventDefault(); // يمنع تمرير الصفحة بالأسهم
+    pushUndoState();
     const step = e.shiftKey ? 10 : 1;
     let left = parseFloat(selectedElement.style.left) || 0;
     let top = parseFloat(selectedElement.style.top) || 0;
@@ -209,6 +308,7 @@ function togglePivotMode() {
 
 function resetPivot() {
     if (!selectedElement) return alert("Select an element first!");
+    pushUndoState();
     selectedElement.dataset.pivotX = 50;
     selectedElement.dataset.pivotY = 50;
     updateTransform(selectedElement);
@@ -217,6 +317,7 @@ function resetPivot() {
 // 5. أدوات التحكم (التدوير، القلب، الإخفاء، الحذف)
 function rotateBy(angle) {
     if (!selectedElement) return alert("Select an element first!");
+    pushUndoState();
     let rot = parseInt(selectedElement.dataset.rotation) || 0;
     rot = (rot + angle) % 360;
     selectedElement.dataset.rotation = rot;
@@ -225,14 +326,54 @@ function rotateBy(angle) {
 
 function flipSelected() {
     if (!selectedElement) return alert("Select an element first!");
+    pushUndoState();
     let scaleX = parseFloat(selectedElement.dataset.scaleX) || 1;
     scaleX *= -1;
     selectedElement.dataset.scaleX = scaleX;
     updateTransform(selectedElement);
 }
 
+// ================== ترتيب الطبقات (Z-Order) ==================
+// يحرّك العنصر المحدد خطوة واحدة للأمام أو للخلف، فقط بين إخوته المباشرين في نفس الأب
+// (المسرح الرئيسي، أو داخل نفس الكائن المركّب لو كان العنصر جزءاً من Rig) — وليس بشكل عالمي،
+// لأن الترتيب بين عناصر تابعة لآباء مختلفين أصلاً لا معنى تنافسي له بينها
+function getZOrderSiblings(el) {
+    const parent = el.parentElement;
+    if (!parent) return [];
+    return Array.from(parent.children)
+        .filter(child => child.classList.contains('character') || child.classList.contains('rig'))
+        .sort((a, b) => (parseInt(a.style.zIndex) || 0) - (parseInt(b.style.zIndex) || 0));
+}
+
+function bringForward() {
+    if (!selectedElement) return alert("Select an element first!");
+    const siblings = getZOrderSiblings(selectedElement);
+    const idx = siblings.indexOf(selectedElement);
+    if (idx === -1 || idx >= siblings.length - 1) return; // العنصر في أعلى طبقة بين إخوته أصلاً
+
+    pushUndoState();
+    const next = siblings[idx + 1];
+    const tmp = selectedElement.style.zIndex;
+    selectedElement.style.zIndex = next.style.zIndex;
+    next.style.zIndex = tmp;
+}
+
+function sendBackward() {
+    if (!selectedElement) return alert("Select an element first!");
+    const siblings = getZOrderSiblings(selectedElement);
+    const idx = siblings.indexOf(selectedElement);
+    if (idx <= 0) return; // العنصر في أسفل طبقة بين إخوته أصلاً
+
+    pushUndoState();
+    const prev = siblings[idx - 1];
+    const tmp = selectedElement.style.zIndex;
+    selectedElement.style.zIndex = prev.style.zIndex;
+    prev.style.zIndex = tmp;
+}
+
 function scaleSelected(amount) {
     if (!selectedElement) return alert("Select an element first!");
+    pushUndoState();
     let scale = parseFloat(selectedElement.dataset.scale) || 1;
     scale += amount;
     if (scale < 0.2) scale = 0.2; // حد أدنى حتى لا تختفي الشخصية
@@ -246,6 +387,7 @@ let hiddenElements = [];
 
 function toggleVisibility() {
     if (!selectedElement) return alert("Select an element first!");
+    pushUndoState();
     if (selectedElement.style.display === 'none') {
         showElement(selectedElement);
     } else {
@@ -295,12 +437,13 @@ function renderHiddenList() {
         const showBtn = document.createElement('button');
         showBtn.textContent = '👁 Show';
         showBtn.style.cssText = 'flex:1; font-size:11px; padding:4px; min-width:0;';
-        showBtn.onclick = () => showElement(el);
+        showBtn.onclick = () => { pushUndoState(); showElement(el); };
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '🗑';
         delBtn.style.cssText = 'font-size:11px; padding:4px 6px; min-width:0; background:#eb3b5a;';
         delBtn.onclick = () => {
+            pushUndoState();
             hiddenElements = hiddenElements.filter(x => x !== el);
             el.remove();
             renderHiddenList();
@@ -315,6 +458,7 @@ function renderHiddenList() {
 
 function deleteSelected() {
     if (selectedElement) {
+        pushUndoState();
         hiddenElements = hiddenElements.filter(x => x !== selectedElement);
         selectedElement.remove();
         selectedElement = null;
@@ -374,6 +518,30 @@ function loadCharacters() {
     loadImageList('characters', 'char-grid', addCharacterToStage);
 }
 
+// تعبئة القائمة المنسدلة بملفات الصوت المرفوعة (بجانب حقل FPS)
+function loadAudioList() {
+    const select = document.getElementById('audio-select');
+    if (!select) return;
+    const previousValue = select.value;
+
+    fetch('get_files.php?type=audio')
+        .then(response => response.json())
+        .then(files => {
+            select.innerHTML = '<option value="">None</option>';
+            files.forEach(src => {
+                const opt = document.createElement('option');
+                opt.value = src;
+                opt.textContent = src.split('/').pop();
+                select.appendChild(opt);
+            });
+            // نحافظ على الاختيار السابق إن كان لا يزال موجوداً في القائمة
+            if ([...select.options].some(o => o.value === previousValue)) {
+                select.value = previousValue;
+            }
+        })
+        .catch(err => console.error('Failed to load audio list:', err));
+}
+
 // رفع صورة أو أكثر لمجلد الخلفيات أو الشخصيات على السيرفر
 async function uploadImages(fileList, type, onDone) {
     if (!fileList || fileList.length === 0) return;
@@ -398,6 +566,28 @@ async function uploadImages(fileList, type, onDone) {
     if (onDone) onDone();
 }
 
+// رفع ملف صوتي واحد لمجلد audio عبر ملف الرفع المستقل الخاص بالصوت
+async function uploadAudio(fileList, onDone) {
+    if (!fileList || fileList.length === 0) return;
+
+    const file = fileList[0];
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const response = await fetch('upload_mp3.php', { method: 'POST', body: formData });
+        const data = await response.json();
+        if (!data.success) {
+            alert(`Failed to upload "${file.name}": ${data.error || 'Unknown error'}`);
+        }
+    } catch (err) {
+        console.error('Upload error:', err);
+        alert(`Could not upload "${file.name}", check the server connection.`);
+    }
+
+    if (onDone) onDone();
+}
+
 // 7. الخط الزمني (Timeline): كل لقطة = حالة كاملة قابلة للاسترجاع، بدون أي تصوير للشاشة
 let shotNumber = 1;
 
@@ -409,6 +599,196 @@ function ensureElId(el) {
     if (!el.dataset.elId) el.dataset.elId = 'el' + (++elIdCounter);
     return el.dataset.elId;
 }
+
+// ================== تأثيرات الألوان (Color Effects) على الشخصيات/الأجزاء فقط ==================
+const COLOR_FX_DEFAULTS = {
+    opacity: 1, brightness: 100, contrast: 100, saturate: 100, hue: 0, blur: 0, sepia: 0,
+    // shadowOpacity = 0 يعني "بلا ظل" افتراضياً، حتى تبقى كل اللقطات القديمة (المحفوظة قبل هذه الميزة)
+    // بلا أي تغيير بصري عند تحميلها — لا حاجة لعلَم "enabled" منفصل
+    shadowOpacity: 0, shadowBlur: 8, shadowOffsetX: 6, shadowOffsetY: 10
+};
+
+function getColorFx(el) {
+    if (!el || !el.dataset.colorFx) return { ...COLOR_FX_DEFAULTS };
+    try {
+        return { ...COLOR_FX_DEFAULTS, ...JSON.parse(el.dataset.colorFx) };
+    } catch (e) {
+        return { ...COLOR_FX_DEFAULTS };
+    }
+}
+
+// يطبّق القيم المحفوظة في dataset.colorFx فعلياً على صورة الشخصية (يُستدعى من المسرح الحي وأيضاً من المعاينات/التصدير)
+function applyColorFx(el) {
+    const innerImg = el.querySelector(':scope > img.character-img');
+    if (!innerImg) return;
+    const fx = getColorFx(el);
+    innerImg.style.opacity = fx.opacity;
+
+    let filterStr =
+        `brightness(${fx.brightness}%) contrast(${fx.contrast}%) saturate(${fx.saturate}%) hue-rotate(${fx.hue}deg) blur(${fx.blur}px) sepia(${fx.sepia}%)`;
+
+    // الظل يُضاف كآخر فلتر في السلسلة (drop-shadow يتبع الشكل الفعلي بعد كل الفلاتر السابقة)،
+    // ولا يُضاف إطلاقاً إن كانت شفافيته صفراً، توفيراً لتكلفة رسم غير مرئية أصلاً
+    if (fx.shadowOpacity > 0) {
+        filterStr += ` drop-shadow(${fx.shadowOffsetX}px ${fx.shadowOffsetY}px ${fx.shadowBlur}px rgba(0,0,0,${fx.shadowOpacity}))`;
+    }
+
+    innerImg.style.filter = filterStr;
+}
+
+function updateColorEffectsLabels(fx) {
+    document.getElementById('cfx-val-opacity').textContent = fx.opacity;
+    document.getElementById('cfx-val-brightness').textContent = fx.brightness;
+    document.getElementById('cfx-val-contrast').textContent = fx.contrast;
+    document.getElementById('cfx-val-saturate').textContent = fx.saturate;
+    document.getElementById('cfx-val-hue').textContent = fx.hue;
+    document.getElementById('cfx-val-blur').textContent = fx.blur;
+    document.getElementById('cfx-val-sepia').textContent = fx.sepia;
+    document.getElementById('cfx-val-shadowOpacity').textContent = fx.shadowOpacity;
+    document.getElementById('cfx-val-shadowBlur').textContent = fx.shadowBlur;
+    document.getElementById('cfx-val-shadowOffsetX').textContent = fx.shadowOffsetX;
+    document.getElementById('cfx-val-shadowOffsetY').textContent = fx.shadowOffsetY;
+}
+
+// فتح النافذة المنبثقة وتحميل القيم الحالية للعنصر المحدد (أو الافتراضية إن لم يكن له فلتر محفوظ)
+function openColorEffectsPanel() {
+    if (!selectedElement) return alert("Select a character first!");
+    if (!selectedElement.querySelector(':scope > img.character-img')) {
+        return alert("Color effects currently work on a single character/part, not a whole rig frame. Select a part inside it.");
+    }
+    // نسجّل الحالة مرة واحدة هنا (قبل أي تعديل بالمنزلقات)، حتى يعيد "تراجع" كل التعديلات التي ستتم في هذه الجلسة دفعة واحدة
+    pushUndoState();
+
+    const fx = getColorFx(selectedElement);
+    document.getElementById('cfx-opacity').value = fx.opacity;
+    document.getElementById('cfx-brightness').value = fx.brightness;
+    document.getElementById('cfx-contrast').value = fx.contrast;
+    document.getElementById('cfx-saturate').value = fx.saturate;
+    document.getElementById('cfx-hue').value = fx.hue;
+    document.getElementById('cfx-blur').value = fx.blur;
+    document.getElementById('cfx-sepia').value = fx.sepia;
+    document.getElementById('cfx-shadowOpacity').value = fx.shadowOpacity;
+    document.getElementById('cfx-shadowBlur').value = fx.shadowBlur;
+    document.getElementById('cfx-shadowOffsetX').value = fx.shadowOffsetX;
+    document.getElementById('cfx-shadowOffsetY').value = fx.shadowOffsetY;
+    updateColorEffectsLabels(fx);
+
+    document.getElementById('color-fx-panel').style.display = 'block';
+}
+
+function closeColorEffectsPanel() {
+    document.getElementById('color-fx-panel').style.display = 'none';
+}
+
+// يُستدعى مع كل تحريك لأي منزلق: يطبّق التأثير حياً على المسرح الفعلي ويحفظه في dataset الخاص بالعنصر
+function onColorEffectsInput() {
+    if (!selectedElement) return;
+    const fx = {
+        opacity: parseFloat(document.getElementById('cfx-opacity').value),
+        brightness: parseFloat(document.getElementById('cfx-brightness').value),
+        contrast: parseFloat(document.getElementById('cfx-contrast').value),
+        saturate: parseFloat(document.getElementById('cfx-saturate').value),
+        hue: parseFloat(document.getElementById('cfx-hue').value),
+        blur: parseFloat(document.getElementById('cfx-blur').value),
+        sepia: parseFloat(document.getElementById('cfx-sepia').value),
+        shadowOpacity: parseFloat(document.getElementById('cfx-shadowOpacity').value),
+        shadowBlur: parseFloat(document.getElementById('cfx-shadowBlur').value),
+        shadowOffsetX: parseFloat(document.getElementById('cfx-shadowOffsetX').value),
+        shadowOffsetY: parseFloat(document.getElementById('cfx-shadowOffsetY').value)
+    };
+    updateColorEffectsLabels(fx);
+    selectedElement.dataset.colorFx = JSON.stringify(fx);
+    applyColorFx(selectedElement);
+}
+
+function resetColorEffects() {
+    if (!selectedElement) return;
+    pushUndoState();
+    delete selectedElement.dataset.colorFx;
+    applyColorFx(selectedElement);
+    openColorEffectsPanel(); // إعادة تحميل القيم الافتراضية في المنزلقات
+}
+
+// ربط كل منزلق بحدث input مرة واحدة عند تحميل السكربت (عناصر النافذة المنبثقة ثابتة في الصفحة)
+['opacity', 'brightness', 'contrast', 'saturate', 'hue', 'blur', 'sepia',
+ 'shadowOpacity', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'].forEach(key => {
+    const input = document.getElementById('cfx-' + key);
+    if (input) input.addEventListener('input', onColorEffectsInput);
+});
+
+// ================== تدرّج لوني على مستوى اللقطة كاملة (Scene Grading) ==================
+// بعكس Color Effects التي تُطبَّق على شخصية واحدة فقط، هذا يُطبَّق على camera-layer نفسها —
+// أي الخلفية وكل الشخصيات معاً دفعة واحدة — لضبط "مزاج" اللقطة كلها (دفء غروب، تبريد ليلي...).
+// يُحفَظ كجزء من حالة اللقطة نفسها (مثل الكاميرا تماماً)، لا كإعداد عام ثابت للتطبيق كله.
+const SCENE_GRADE_DEFAULTS = { brightness: 100, contrast: 100, saturate: 100, hue: 0, blur: 0, sepia: 0, opacity: 1 };
+let sceneGrade = { ...SCENE_GRADE_DEFAULTS };
+
+// يبني نص فلتر CSS من كائن تدرّج لوني — دالة مشتركة يستخدمها المسرح الحي، المصغّرات، عرض الفيلم،
+// ورق البصل، والتصدير، حتى تُطبَّق نفس القيم بنفس الطريقة في كل مكان تظهر فيه اللقطة
+function sceneGradeFilterString(g) {
+    const grade = { ...SCENE_GRADE_DEFAULTS, ...(g || {}) };
+    return `brightness(${grade.brightness}%) contrast(${grade.contrast}%) saturate(${grade.saturate}%) `
+         + `hue-rotate(${grade.hue}deg) blur(${grade.blur}px) sepia(${grade.sepia}%) opacity(${grade.opacity})`;
+}
+
+// يطبّق التدرّج الحالي (sceneGrade) فعلياً على المسرح الحي أثناء التعديل
+function applySceneGrade() {
+    camLayer.style.filter = sceneGradeFilterString(sceneGrade);
+}
+
+function updateSceneGradeLabels(g) {
+    document.getElementById('sg-val-brightness').textContent = g.brightness;
+    document.getElementById('sg-val-contrast').textContent = g.contrast;
+    document.getElementById('sg-val-saturate').textContent = g.saturate;
+    document.getElementById('sg-val-hue').textContent = g.hue;
+    document.getElementById('sg-val-blur').textContent = g.blur;
+    document.getElementById('sg-val-sepia').textContent = g.sepia;
+    document.getElementById('sg-val-opacity').textContent = g.opacity;
+}
+
+function openSceneGradePanel() {
+    // نسجّل الحالة مرة واحدة هنا، قبل أي تعديل بالمنزلقات، حتى يعيد "تراجع" كل تعديلات هذه الجلسة دفعة واحدة
+    pushUndoState();
+    document.getElementById('sg-brightness').value = sceneGrade.brightness;
+    document.getElementById('sg-contrast').value = sceneGrade.contrast;
+    document.getElementById('sg-saturate').value = sceneGrade.saturate;
+    document.getElementById('sg-hue').value = sceneGrade.hue;
+    document.getElementById('sg-blur').value = sceneGrade.blur;
+    document.getElementById('sg-sepia').value = sceneGrade.sepia;
+    document.getElementById('sg-opacity').value = sceneGrade.opacity;
+    updateSceneGradeLabels(sceneGrade);
+    document.getElementById('scene-grade-panel').style.display = 'block';
+}
+
+function closeSceneGradePanel() {
+    document.getElementById('scene-grade-panel').style.display = 'none';
+}
+
+function onSceneGradeInput() {
+    sceneGrade = {
+        brightness: parseFloat(document.getElementById('sg-brightness').value),
+        contrast: parseFloat(document.getElementById('sg-contrast').value),
+        saturate: parseFloat(document.getElementById('sg-saturate').value),
+        hue: parseFloat(document.getElementById('sg-hue').value),
+        blur: parseFloat(document.getElementById('sg-blur').value),
+        sepia: parseFloat(document.getElementById('sg-sepia').value),
+        opacity: parseFloat(document.getElementById('sg-opacity').value)
+    };
+    updateSceneGradeLabels(sceneGrade);
+    applySceneGrade();
+}
+
+function resetSceneGrade() {
+    pushUndoState();
+    sceneGrade = { ...SCENE_GRADE_DEFAULTS };
+    applySceneGrade();
+    openSceneGradePanel(); // إعادة تحميل القيم الافتراضية في المنزلقات (بدون تسجيل تراجع مضاعف مهم، فهذا مجرد عرض)
+}
+
+['brightness', 'contrast', 'saturate', 'hue', 'blur', 'sepia', 'opacity'].forEach(key => {
+    const input = document.getElementById('sg-' + key);
+    if (input) input.addEventListener('input', onSceneGradeInput);
+});
 
 // يبني وصفاً كاملاً قابلاً للاسترجاع لعنصر واحد (شخصية أو كائن مركب)، بما فيه أطفاله إن وُجدوا
 function serializeElement(el) {
@@ -426,6 +806,7 @@ function serializeElement(el) {
         scaleX: el.dataset.scaleX || 1,
         pivotX: el.dataset.pivotX || 50,
         pivotY: el.dataset.pivotY || 50,
+        colorFx: el.dataset.colorFx || null,
         src: innerImg ? innerImg.src : null,
         children: []
     };
@@ -437,15 +818,17 @@ function serializeElement(el) {
     return data;
 }
 
-// يجمع حالة المسرح بأكملها: الخلفية (صورة/زووم/إزاحة) + كل الشخصيات والكائنات المركبة + أبعاد المسرح
-// (أبعاد المسرح تُحفظ حتى تُبنى المعاينة المصغّرة لاحقاً بالمقياس الصحيح)
+// يجمع حالة المسرح بأكملها: الخلفية (صورة/زووم/إزاحة) + كاميرا المسرح الكاملة + كل الشخصيات
+// والكائنات المركبة + أبعاد المسرح (أبعاد المسرح تُحفظ حتى تُبنى المعاينة المصغّرة لاحقاً بالمقياس الصحيح)
 function serializeScene() {
     const topLevel = [];
-    container.querySelectorAll(':scope > .character, :scope > .rig').forEach(el => {
+    camLayer.querySelectorAll(':scope > .character, :scope > .rig').forEach(el => {
         topLevel.push(serializeElement(el));
     });
     return {
         background: { src: bgImage.src, scale: bgScale, offsetX: bgOffsetX, offsetY: bgOffsetY },
+        camera: { scale: camScale, offsetX: camOffsetX, offsetY: camOffsetY },
+        grade: { ...sceneGrade },
         elements: topLevel,
         topZIndex: topZIndex,
         charCounter: charCounter,
@@ -468,6 +851,7 @@ function rebuildElement(data, parent) {
     wrapper.dataset.scaleX = data.scaleX;
     wrapper.dataset.pivotX = data.pivotX;
     wrapper.dataset.pivotY = data.pivotY;
+    if (data.colorFx) wrapper.dataset.colorFx = data.colorFx;
 
     if (data.type === 'character' && data.src) {
         const img = document.createElement('img');
@@ -475,6 +859,7 @@ function rebuildElement(data, parent) {
         img.className = 'character-img';
         img.draggable = false;
         wrapper.appendChild(img);
+        applyColorFx(wrapper);
     }
 
     makeDraggable(wrapper);
@@ -489,8 +874,8 @@ function rebuildElement(data, parent) {
     return wrapper;
 }
 
-// يعيد بناء المسرح الحقيقي بالكامل من حالة محفوظة — الشخصيات تصبح قابلة للسحب والتعديل من جديد
-function restoreScene(state) {
+// يعيد بناء المسرح الحقيقي بالكامل من حالة محفوظة (بدون لمس مكدس التراجع) — الشخصيات تصبح قابلة للسحب والتعديل من جديد
+function applySceneState(state) {
     container.querySelectorAll('.character, .rig').forEach(el => el.remove());
     hiddenElements = [];
     selectedElement = null;
@@ -501,12 +886,31 @@ function restoreScene(state) {
     bgOffsetY = state.background.offsetY;
     updateBgTransform();
 
-    state.elements.forEach(data => rebuildElement(data, container));
+    // state.camera قد لا يكون موجوداً في ملفات سيناريو قديمة صُدّرت قبل إضافة الكاميرا — نستخدم قيماً محايدة حينها
+    const cam = state.camera || { scale: 1, offsetX: 0, offsetY: 0 };
+    camScale = cam.scale;
+    camOffsetX = cam.offsetX;
+    camOffsetY = cam.offsetY;
+    updateCameraTransform();
+
+    // نفس المنطق: state.grade قد لا يكون موجوداً في لقطات قديمة صُدّرت قبل إضافة التدرّج اللوني
+    sceneGrade = { ...SCENE_GRADE_DEFAULTS, ...(state.grade || {}) };
+    applySceneGrade();
+
+    state.elements.forEach(data => rebuildElement(data, camLayer));
 
     topZIndex = state.topZIndex || topZIndex;
     charCounter = state.charCounter || charCounter;
 
     renderHiddenList();
+}
+
+// نقطة الدخول العامة للقفز إلى لقطة محفوظة (من الخط الزمني أو من استيراد سيناريو): تعيد بناء المسرح
+// وتُفرّغ مكدس التراجع، لأن تاريخ "التراجع" الخاص باللقطة السابقة لا معنى له بعد القفز للقطة أخرى
+function restoreScene(state) {
+    applySceneState(state);
+    undoStack = [];
+    updateUndoButtonState();
 }
 
 // يبني عنصر واحد **غير تفاعلي** (بدون سحب) لاستخدامه في المعاينات المصغّرة وعرض الفيلم فقط
@@ -523,6 +927,7 @@ function buildStaticElement(data, parent) {
     wrapper.dataset.scaleX = data.scaleX;
     wrapper.dataset.pivotX = data.pivotX;
     wrapper.dataset.pivotY = data.pivotY;
+    if (data.colorFx) wrapper.dataset.colorFx = data.colorFx;
 
     if (data.type === 'character' && data.src) {
         const img = document.createElement('img');
@@ -530,6 +935,7 @@ function buildStaticElement(data, parent) {
         img.className = 'character-img';
         img.draggable = false;
         wrapper.appendChild(img);
+        applyColorFx(wrapper);
     }
     parent.appendChild(wrapper);
     updateTransform(wrapper);
@@ -560,6 +966,16 @@ function renderScenePreview(state, box) {
     mini.style.background = '#fff';
     mini.style.overflow = 'hidden';
 
+    // طبقة فرعية تحمل تحويل كاميرا هذه اللقطة بالذات، حتى تعكس المعاينة المصغّرة (وعرض الفيلم)
+    // فعلياً تأثير الزووم/التحريك الذي طبّقناه على كل المسرح وقت حفظ هذه اللقطة
+    const camDiv = document.createElement('div');
+    camDiv.style.position = 'absolute';
+    camDiv.style.inset = '0';
+    const cam = state.camera || { scale: 1, offsetX: 0, offsetY: 0 };
+    camDiv.style.transform = `translate(${cam.offsetX}px, ${cam.offsetY}px) scale(${cam.scale})`;
+    camDiv.style.filter = sceneGradeFilterString(state.grade);
+    mini.appendChild(camDiv);
+
     if (state.background && state.background.src) {
         const bg = document.createElement('img');
         bg.src = state.background.src;
@@ -571,16 +987,91 @@ function renderScenePreview(state, box) {
         bg.style.objectFit = 'cover';
         bg.style.transform =
             `translate(-50%,-50%) translate(${state.background.offsetX}px, ${state.background.offsetY}px) scale(${state.background.scale})`;
-        mini.appendChild(bg);
+        camDiv.appendChild(bg);
     }
 
-    state.elements.forEach(data => buildStaticElement(data, mini));
+    state.elements.forEach(data => buildStaticElement(data, camDiv));
     box.appendChild(mini);
 }
 
 // مصفوفة الخط الزمني: كل عنصر = لقطة كاملة (رقمها + الحالة الكاملة القابلة للاسترجاع والتعديل)
 let timeline = [];
 let activeFrameIndex = -1;
+
+// ================== ورق البصل (Onion Skinning) ==================
+// يعرض اللقطة "السابقة" (بالنسبة لموضع التعديل الحالي) بشفافية خفيفة خلف المسرح، كمرجع بصري فقط.
+// غير قابلة للنقر أو التحريك، وتُحدَّث تلقائياً مع أي تغيير على الخط الزمني أو استرجاع لقطة.
+let onionSkinEnabled = false;
+
+function toggleOnionSkin() {
+    onionSkinEnabled = !onionSkinEnabled;
+    const btn = document.getElementById('onion-skin-btn');
+    if (btn) {
+        btn.textContent = onionSkinEnabled ? '🧅 Onion Skin: On' : '🧅 Onion Skin: Off';
+        btn.style.backgroundColor = onionSkinEnabled ? '#e74c3c' : '#8e44ad';
+    }
+    updateOnionSkin();
+}
+
+// تحدد أي لقطة تُعتبر "السابقة" بالنسبة لموضع العمل الحالي:
+// - إذا كانت هناك لقطة محمَّلة للتعديل (activeFrameIndex)، فالمرجع هو التي قبلها في الخط الزمني.
+// - إذا كنا نبني لقطة جديدة لم تُحفظ بعد (لا يوجد تحديد نشط)، فالمرجع هو آخر لقطة محفوظة،
+//   لأن اللقطة الجديدة ستُضاف بعدها مباشرة عند الضغط على "Save New Shot".
+function getOnionReferenceFrame() {
+    if (activeFrameIndex >= 0 && timeline[activeFrameIndex]) {
+        return timeline[activeFrameIndex - 1] || null;
+    }
+    return timeline.length ? timeline[timeline.length - 1] : null;
+}
+
+// يعيد رسم طبقة ورق البصل من الصفر بناءً على حالة اللقطة المرجعية، باستخدام نفس بناء العناصر
+// غير التفاعلي المستخدم في المعاينات المصغّرة (buildStaticElement)، بدون أي احتكاك بالمسرح الحي
+function updateOnionSkin() {
+    const layer = document.getElementById('onion-layer');
+    if (!layer) return;
+
+    layer.innerHTML = '';
+
+    if (!onionSkinEnabled) {
+        layer.classList.remove('active');
+        return;
+    }
+
+    const ref = getOnionReferenceFrame();
+    if (!ref) {
+        layer.classList.remove('active'); // لا توجد لقطة سابقة بعد لعرضها كمرجع
+        return;
+    }
+
+    layer.classList.add('active');
+    const state = ref.state;
+
+    // نبني محتوى اللقطة المرجعية داخل طبقة فرعية تحمل تحويل الكاميرا الخاص بتلك اللقطة نفسها
+    // (وليس كاميرا اللقطة الحالية)، حتى يظهر الشبح مطابقاً تماماً لما كان معروضاً فعلياً وقتها
+    const camDiv = document.createElement('div');
+    camDiv.style.position = 'absolute';
+    camDiv.style.inset = '0';
+    const cam = state.camera || { scale: 1, offsetX: 0, offsetY: 0 };
+    camDiv.style.transform = `translate(${cam.offsetX}px, ${cam.offsetY}px) scale(${cam.scale})`;
+    camDiv.style.filter = sceneGradeFilterString(state.grade);
+    layer.appendChild(camDiv);
+
+    if (state.background && state.background.src) {
+        const bg = document.createElement('img');
+        bg.src = state.background.src;
+        bg.style.position = 'absolute';
+        bg.style.top = '50%';
+        bg.style.left = '50%';
+        bg.style.width = '100%';
+        bg.style.height = '100%';
+        bg.style.objectFit = 'cover';
+        bg.style.transform =
+            `translate(-50%,-50%) translate(${state.background.offsetX}px, ${state.background.offsetY}px) scale(${state.background.scale})`;
+        camDiv.appendChild(bg);
+    }
+
+    state.elements.forEach(data => buildStaticElement(data, camDiv));
+}
 
 // حفظ لقطة جديدة في نهاية الخط الزمني دائماً (لا تُستبدل أي لقطة سابقة)
 function saveNewShot() {
@@ -618,6 +1109,7 @@ function renderFilmstrip() {
     if (timeline.length === 0) {
         track.innerHTML = '<p style="font-size:11px; color:#888; margin:2px 10px;">No shots recorded yet — click "💾 Save New Shot"</p>';
         updateActiveFrameLabel();
+        updateOnionSkin();
         return;
     }
 
@@ -653,11 +1145,19 @@ function renderFilmstrip() {
         };
         thumb.appendChild(del);
 
-        // النقر على أي لقطة سابقة يحمّلها على المسرح الحقيقي للتعديل (وليس فقط لعرضها)
+        // النقر على أي لقطة سابقة يحمّلها على المسرح الحقيقي للتعديل (وليس فقط لعرضها).
+        // لا نعيد بناء الشريط بالكامل هنا (renderFilmstrip) لأن ذلك يعيد إنشاء كل الصور في كل
+        // مصغّرة من جديد رغم أن شيئاً منها لم يتغيّر فعلياً — فقط ننقل صنف "active" بين المصغّرتين،
+        // وهذا وحده كافٍ لتحديث المظهر ويمنع التجمّد عند التنقل السريع بين اللقطات.
         thumb.onclick = () => {
+            const prevActive = track.querySelector('.frame-thumb.active');
+            if (prevActive) prevActive.classList.remove('active');
+            thumb.classList.add('active');
+
             activeFrameIndex = index;
             restoreScene(frame.state);
-            renderFilmstrip();
+            updateActiveFrameLabel();
+            updateOnionSkin();
         };
 
         // الضغط المزدوج على أي لقطة ينسخها ويضعها بجانب الأصلية مباشرة في الخط الزمني
@@ -666,11 +1166,55 @@ function renderFilmstrip() {
             duplicateShot(index);
         };
 
+        // زرّا تحريك اللقطة خطوة واحدة لليسار أو لليمين داخل الخط الزمني
+        const moveRow = document.createElement('div');
+        moveRow.style.cssText = 'position:absolute; bottom:2px; left:2px; right:2px; z-index:2; display:flex; gap:2px;';
+
+        const moveLeftBtn = document.createElement('button');
+        moveLeftBtn.textContent = '◀';
+        moveLeftBtn.title = 'Move this shot one step earlier';
+        moveLeftBtn.style.cssText = 'flex:1; font-size:10px; padding:2px 0; min-width:0; background:#6c757d; color:#fff; border:none; border-radius:3px; cursor:pointer;';
+        moveLeftBtn.onclick = (e) => {
+            e.stopPropagation();
+            moveShot(index, -1);
+        };
+
+        const moveRightBtn = document.createElement('button');
+        moveRightBtn.textContent = '▶';
+        moveRightBtn.title = 'Move this shot one step later';
+        moveRightBtn.style.cssText = 'flex:1; font-size:10px; padding:2px 0; min-width:0; background:#6c757d; color:#fff; border:none; border-radius:3px; cursor:pointer;';
+        moveRightBtn.onclick = (e) => {
+            e.stopPropagation();
+            moveShot(index, 1);
+        };
+
+        moveRow.appendChild(moveLeftBtn);
+        moveRow.appendChild(moveRightBtn);
+        thumb.appendChild(moveRow);
+
         track.appendChild(thumb);
         renderScenePreview(frame.state, previewBox);
     });
 
     updateActiveFrameLabel();
+    updateOnionSkin();
+}
+
+// يحرّك لقطة واحدة خطوة واحدة يميناً أو يساراً ضمن الخط الزمني (direction: -1 أو 1)
+function moveShot(index, direction) {
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= timeline.length) return;
+
+    const [moved] = timeline.splice(index, 1);
+    timeline.splice(newIndex, 0, moved);
+
+    if (activeFrameIndex === index) {
+        activeFrameIndex = newIndex;
+    } else if (activeFrameIndex === newIndex) {
+        activeFrameIndex = index;
+    }
+
+    renderFilmstrip();
 }
 
 // ينسخ لقطة موجودة نسخة كاملة مستقلة (بدون أي ارتباط بالأصلية) ويضعها مباشرة بعدها في الخط الزمني
@@ -748,6 +1292,7 @@ function importScenario(file) {
 
 // عرض الفيلم: يبني كل لقطة مباشرة من بيانات المصفوفة (بدون أي صورة ملتقطة) بسرعة (FPS) قابلة للتغيير
 let playbackTimer = null;
+let playbackAudio = null;
 
 function playFilm() {
     if (timeline.length === 0) return alert('No shots recorded yet!');
@@ -757,6 +1302,17 @@ function playFilm() {
     const counter = document.getElementById('play-frame-counter');
     const fps = Math.max(1, Math.min(30, parseInt(document.getElementById('fps-input').value) || 8));
     const delay = 1000 / fps;
+
+    // تشغيل الصوت المختار مرة واحدة فقط مع بداية العرض، دون أي تكرار حتى لو تكرر الفيلم
+    const audioSelect = document.getElementById('audio-select');
+    if (playbackAudio) {
+        playbackAudio.pause();
+        playbackAudio = null;
+    }
+    if (audioSelect && audioSelect.value) {
+        playbackAudio = new Audio(audioSelect.value);
+        playbackAudio.play().catch(err => console.error('Audio playback error:', err));
+    }
 
     overlay.style.display = 'flex';
     let i = 0;
@@ -775,6 +1331,10 @@ function playFilm() {
 function stopPlayback() {
     clearInterval(playbackTimer);
     playbackTimer = null;
+    if (playbackAudio) {
+        playbackAudio.pause();
+        playbackAudio = null;
+    }
     document.getElementById('play-overlay').style.display = 'none';
 }
 
@@ -833,6 +1393,15 @@ async function exportAllFramesAsImages() {
             exportStage.style.height = h + 'px';
             exportStage.innerHTML = '';
 
+            // طبقة فرعية تحمل تحويل كاميرا هذه اللقطة، حتى يطابق التصدير النهائي ما يظهر فعلياً على المسرح
+            const camDiv = document.createElement('div');
+            camDiv.style.position = 'absolute';
+            camDiv.style.inset = '0';
+            const cam = state.camera || { scale: 1, offsetX: 0, offsetY: 0 };
+            camDiv.style.transform = `translate(${cam.offsetX}px, ${cam.offsetY}px) scale(${cam.scale})`;
+            camDiv.style.filter = sceneGradeFilterString(state.grade);
+            exportStage.appendChild(camDiv);
+
             if (state.background && state.background.src) {
                 const bg = document.createElement('img');
                 bg.src = state.background.src;
@@ -844,10 +1413,10 @@ async function exportAllFramesAsImages() {
                 bg.style.objectFit = 'cover';
                 bg.style.transform =
                     `translate(-50%,-50%) translate(${state.background.offsetX}px, ${state.background.offsetY}px) scale(${state.background.scale})`;
-                exportStage.appendChild(bg);
+                camDiv.appendChild(bg);
             }
 
-            state.elements.forEach(data => buildStaticElement(data, exportStage));
+            state.elements.forEach(data => buildStaticElement(data, camDiv));
 
             await waitForImages(exportStage);
 
@@ -916,5 +1485,8 @@ window.addEventListener('resize', fitStageToAspectRatio);
 document.addEventListener('DOMContentLoaded', () => {
     loadBackgrounds();
     loadCharacters();
+    loadAudioList();
     fitStageToAspectRatio();
+    updateUndoButtonState();
+    updateCameraTransform();
 });

@@ -3,7 +3,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 $action = isset($_POST['action']) ? $_POST['action'] : '';
 $type = isset($_POST['type']) ? $_POST['type'] : '';
-$allowedTypes = ['backgrounds', 'characters'];
+$allowedTypes = ['backgrounds', 'characters', 'audio'];
 
 if (!in_array($type, $allowedTypes)) {
     echo json_encode(['success' => false, 'error' => 'Invalid type']);
